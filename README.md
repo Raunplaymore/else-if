@@ -1,5 +1,7 @@
 # else-if
 
+![else-if — if 구문으로 현재 방식을 유지하고, else if 구문으로 막힌 상황에서 한 가지 변경을 비교하고 배우는 흐름](assets/else-if-banner.svg)
+
 한국어 · [English](README.en.md)
 
 **같은 시도를 반복하고 있다면, 다음에 무엇을 바꿔볼지 정하세요.**
