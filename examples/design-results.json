@@ -1,0 +1,58 @@
+{
+  "schema_version": "next-experiment/1",
+  "plan_sha256": "0c760c53551127f8bc7ff611f5c75fc7a384d81e00936dd819e0b2bedbf18408",
+  "deviations": [],
+  "usage": {
+    "minutes": 72,
+    "model_calls": 4,
+    "extra_cost": 0
+  },
+  "pairs": [
+    {
+      "id": "lobby-a/run-1",
+      "baseline": {
+        "status": "completed",
+        "metrics": {
+          "total_minutes": 20,
+          "quality": 4
+        },
+        "evidence_refs": [
+          "synthetic: baseline a"
+        ]
+      },
+      "candidate": {
+        "status": "completed",
+        "metrics": {
+          "total_minutes": 15,
+          "quality": 4
+        },
+        "evidence_refs": [
+          "synthetic: candidate a"
+        ]
+      }
+    },
+    {
+      "id": "lobby-b/run-1",
+      "baseline": {
+        "status": "completed",
+        "metrics": {
+          "total_minutes": 21,
+          "quality": 3
+        },
+        "evidence_refs": [
+          "synthetic: baseline b"
+        ]
+      },
+      "candidate": {
+        "status": "completed",
+        "metrics": {
+          "total_minutes": 16,
+          "quality": 4
+        },
+        "evidence_refs": [
+          "synthetic: candidate b"
+        ]
+      }
+    }
+  ]
+}

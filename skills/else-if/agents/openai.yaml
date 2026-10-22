@@ -1,0 +1,4 @@
+interface:
+  display_name: "else-if"
+  short_description: "프로젝트의 막힌 문제를 작은 비교 실험으로 풀고 다음 행동을 정합니다"
+  default_prompt: "$else-if 지금 막힌 프로젝트 문제에서 무엇을 바꿔 시험할지 함께 정해 줘."
