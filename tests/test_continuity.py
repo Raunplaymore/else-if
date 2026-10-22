@@ -160,6 +160,125 @@ class ContinuityTests(unittest.TestCase):
         self.assertEqual(removed.returncode, 0, removed.stderr)
         self.assertEqual(json.loads(config.read_text()), json.loads(before))
 
+    def test_claude_multiturn_lifecycle_and_independent_stop(self):
+        continuity.save(self.cwd, self.session, self.snapshot)
+        event = self.event("/else-if improve the home", permission_mode="default")
+        response = continuity.hook(event, "claude")
+        self.assertEqual(response["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
+        next_snapshot = {**self.snapshot, "last_result": "partial improvement, not release approval"}
+        continuity.save(self.cwd, self.session, next_snapshot, "claude")
+        for prompt in ("Try the first one", "Somewhat better", "What does this metric mean?"):
+            response = continuity.hook(self.event(prompt), "claude")
+            state = json.loads(response["hookSpecificOutput"]["additionalContext"].split("\n", 1)[1])
+            self.assertEqual(state["snapshot"], next_snapshot)
+            self.assertEqual(state["host"], "claude")
+        for source in ("resume", "compact"):
+            event = dict(hook_event_name="SessionStart", cwd=self.cwd, session_id=self.session, source=source)
+            self.assertIsNotNone(continuity.hook(event, "claude"))
+        continuity.hook(self.event("/else-if stop"), "claude")
+        self.assertIsNone(continuity.load(self.cwd, self.session, "claude"))
+        self.assertEqual(continuity.load(self.cwd, self.session)["snapshot"], self.snapshot)
+
+    def test_claude_ignores_codex_syntax_quotes_and_other_sessions(self):
+        for prompt in ("$else-if goal", "`/else-if` example", "Example: /else-if goal", "/else-if-other"):
+            self.assertIsNone(continuity.hook(self.event(prompt), "claude"))
+        self.assertEqual(list(Path(self.cwd).iterdir()), [])
+        continuity.hook(self.event("/else-if goal"), "claude")
+        other = {**self.event(), "session_id": "different"}
+        self.assertIsNone(continuity.hook(other, "claude"))
+        self.assertIsNone(continuity.hook(self.event()))
+        continuity.hook(dict(hook_event_name="SessionStart", cwd=self.cwd,
+                             session_id=self.session, source="clear"), "claude")
+        self.assertIsNone(continuity.load(self.cwd, self.session, "claude"))
+
+    def test_last_hook_receipt_does_not_claim_snapshot_was_updated(self):
+        state = continuity.save(self.cwd, self.session, self.snapshot, "claude")
+        self.assertIsNone(state["last_hook"])
+        continuity.hook(self.event(), "claude")
+        updated = continuity.load(self.cwd, self.session, "claude")
+        self.assertEqual(updated["updated_at"], state["updated_at"])
+        self.assertEqual(updated["last_hook"]["event"], "UserPromptSubmit")
+        self.assertTrue(updated["last_hook"]["at"])
+        continuity.save(self.cwd, self.session, self.snapshot, "claude")
+        self.assertEqual(continuity.load(self.cwd, self.session, "claude")["last_hook"], updated["last_hook"])
+
+    def test_legacy_codex_records_remain_readable_and_upgrade_on_save(self):
+        root, path = continuity.identity(self.cwd, self.session)
+        path.parent.mkdir(parents=True)
+        old = {"version": 1, "session_id": self.session, "cwd": str(root),
+               "updated_at": "2026-10-22T00:00:00+00:00", "snapshot": self.snapshot}
+        path.write_text(json.dumps(old))
+        self.assertEqual(continuity.load(self.cwd, self.session)["snapshot"], self.snapshot)
+        self.assertIsNone(continuity.load(self.cwd, self.session, "claude"))
+        continuity.save(self.cwd, self.session, self.snapshot)
+        self.assertEqual(continuity.load(self.cwd, self.session)["version"], 2)
+
+    def test_claude_cli_requires_explicit_session_and_rejects_symlink_namespace(self):
+        run = subprocess.run([sys.executable, str(SCRIPT), "status", "--host", "claude"],
+                             env={**os.environ, "CODEX_THREAD_ID": self.session},
+                             cwd=self.cwd, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 1)
+        base = Path(self.cwd) / "next-experiment-runs/.else-if-sessions"
+        base.mkdir(parents=True)
+        outside = Path(self.cwd) / "outside"
+        outside.mkdir()
+        (base / "claude").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            continuity.save(self.cwd, self.session, self.snapshot, "claude")
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_claude_installer_preserves_settings_check_and_removal(self):
+        home = Path(self.cwd) / "claude-config"
+        skill = home / "skills/else-if"
+        skill.parent.mkdir(parents=True)
+        skill.symlink_to(SCRIPT.parents[1], target_is_directory=True)
+        config = home / "settings.json"
+        original = {"model": "keep-existing", "permissions": {"allow": ["Read"]},
+                    "hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "existing"}]}]}}
+        before = json.dumps(original).encode()
+        config.write_bytes(before)
+        cmd = [sys.executable, str(ROOT / "scripts/install_continuity.py"), "--host", "claude"]
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(home)}
+        checked = subprocess.run(cmd + ["--check"], env=env, capture_output=True, text=True, check=True)
+        self.assertFalse(json.loads(checked.stdout)["hooks_registered"])
+        self.assertEqual(config.read_bytes(), before)
+        subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
+        installed = json.loads(config.read_text())
+        self.assertEqual(installed["model"], original["model"])
+        self.assertEqual(installed["permissions"], original["permissions"])
+        handler = installed["hooks"]["SessionStart"][-1]["hooks"][0]
+        self.assertNotIn("additionalContextLimit", handler)
+        checked = subprocess.run(cmd + ["--check"], env=env, capture_output=True, text=True, check=True)
+        self.assertTrue(json.loads(checked.stdout)["hooks_registered"])
+        # Execute exactly the installed command using the native event payload contract.
+        prompt_handler = installed["hooks"]["UserPromptSubmit"][-1]["hooks"][0]
+        run = subprocess.run(["/bin/sh", "-c", prompt_handler["command"]],
+                             input=json.dumps(self.event("/else-if test")), cwd=self.cwd,
+                             capture_output=True, text=True, check=True)
+        self.assertIn("additionalContext", json.loads(run.stdout)["hookSpecificOutput"])
+        self.assertIsNotNone(continuity.load(self.cwd, self.session, "claude"))
+        save = subprocess.run([sys.executable, str(SCRIPT), "save", "--host", "claude",
+                               "--session", self.session], input=json.dumps(self.snapshot),
+                              cwd=self.cwd, capture_output=True, text=True, check=True)
+        self.assertTrue(json.loads(save.stdout)["saved"])
+        for payload in (self.event("Somewhat better"),
+                        {"hook_event_name": "SessionStart", "source": "compact",
+                         "cwd": self.cwd, "session_id": self.session}):
+            run = subprocess.run(["/bin/sh", "-c", prompt_handler["command"]], input=json.dumps(payload),
+                                 cwd=self.cwd, capture_output=True, text=True, check=True)
+            state = json.loads(json.loads(run.stdout)["hookSpecificOutput"]["additionalContext"].split("\n", 1)[1])
+            self.assertEqual(state["snapshot"], self.snapshot)
+        subprocess.run(["/bin/sh", "-c", prompt_handler["command"]],
+                       input=json.dumps(self.event("/else-if stop")), cwd=self.cwd,
+                       capture_output=True, text=True, check=True)
+        self.assertIsNone(continuity.load(self.cwd, self.session, "claude"))
+        subprocess.run(cmd + ["--remove"], env=env, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(config.read_text()), original)
+        self.assertTrue(any(p.read_bytes() == before for p in home.glob("settings.json.else-if-backup-*")))
+
+    def test_uninstall_without_existing_hooks_is_a_noop(self):
+        self.assertEqual(installer.merge({}, "unused", remove=True, host="claude"), {})
+
 
 if __name__ == "__main__":
     unittest.main()

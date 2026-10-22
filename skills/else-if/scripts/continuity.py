@@ -14,6 +14,7 @@ import tempfile
 FIELDS = ("stage", "goal", "hypothesis", "last_result", "next_action")
 LIMIT = 1024 * 1024
 SKILL = Path(__file__).resolve().parents[1] / "SKILL.md"
+HOSTS = ("codex", "claude")
 
 
 def read_json(stream, limit=LIMIT):
@@ -26,9 +27,11 @@ def read_json(stream, limit=LIMIT):
     return value
 
 
-def identity(cwd, session):
+def identity(cwd, session, host="codex"):
+    if host not in HOSTS:
+        raise ValueError("unsupported host")
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", session):
-        raise ValueError("valid session ID required; use --session or CODEX_THREAD_ID")
+        raise ValueError("valid session ID required; pass --session from the host hook")
     if not isinstance(cwd, str) or not Path(cwd).is_absolute():
         raise ValueError("absolute project directory required")
     root = Path(cwd).resolve(strict=True)
@@ -38,6 +41,11 @@ def identity(cwd, session):
     for path in (directory.parent, directory):
         if path.is_symlink():
             raise ValueError("state directory must not be a symbolic link")
+    # Keep existing Codex paths readable; other hosts use separate namespaces.
+    if host != "codex":
+        directory = directory / host
+        if directory.is_symlink():
+            raise ValueError("host state directory must not be a symbolic link")
     path = directory / (hashlib.sha256(session.encode()).hexdigest() + ".json")
     if path.is_symlink():
         raise ValueError("state file must not be a symbolic link")
@@ -51,11 +59,7 @@ def validate_snapshot(snapshot):
         raise ValueError("snapshot values must be strings of at most 200 characters")
 
 
-def save(cwd, session, snapshot):
-    validate_snapshot(snapshot)
-    root, path = identity(cwd, session)
-    state = {"version": 1, "session_id": session, "cwd": str(root),
-             "updated_at": datetime.now(timezone.utc).isoformat(), "snapshot": snapshot}
+def write_state(path, state):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Replace atomically so interruption cannot leave a half-written checkpoint.
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".checkpoint-")
@@ -66,29 +70,47 @@ def save(cwd, session, snapshot):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def save(cwd, session, snapshot, host="codex"):
+    validate_snapshot(snapshot)
+    root, path = identity(cwd, session, host)
+    previous = load(cwd, session, host)
+    state = {"version": 2, "host": host, "session_id": session, "cwd": str(root),
+             "updated_at": datetime.now(timezone.utc).isoformat(), "snapshot": snapshot,
+             "last_hook": previous.get("last_hook") if previous else None}
+    write_state(path, state)
     return state
 
 
-def load(cwd, session):
-    root, path = identity(cwd, session)
+def load(cwd, session, host="codex"):
+    root, path = identity(cwd, session, host)
     if not path.exists():
         return None
     with path.open("rb") as stream:
         state = read_json(stream, 16384)
-    if (state.get("version") != 1 or state.get("session_id") != session
+    version_ok = state.get("version") == 2 and state.get("host") == host
+    legacy_ok = host == "codex" and state.get("version") == 1 and "host" not in state
+    if (not (version_ok or legacy_ok) or state.get("session_id") != session
             or state.get("cwd") != str(root) or not isinstance(state.get("snapshot"), dict)
             or not isinstance(state.get("updated_at"), str)):
         raise ValueError("invalid checkpoint identity or version")
     validate_snapshot(state["snapshot"])
+    receipt = state.get("last_hook")
+    if receipt is not None and (not isinstance(receipt, dict)
+                               or set(receipt) != {"event", "at"}
+                               or receipt["event"] not in ("SessionStart", "UserPromptSubmit")
+                               or not isinstance(receipt["at"], str) or len(receipt["at"]) > 64):
+        raise ValueError("invalid hook receipt")
     return state
 
 
-def stop(cwd, session):
-    _, path = identity(cwd, session)
+def stop(cwd, session, host="codex"):
+    _, path = identity(cwd, session, host)
     path.unlink(missing_ok=True)
 
 
-def hook(event):
+def hook(event, host="codex"):
     kind = event.get("hook_event_name")
     if kind not in ("SessionStart", "UserPromptSubmit"):
         return None
@@ -96,7 +118,7 @@ def hook(event):
     if kind == "SessionStart":
         source = event.get("source")
         if source == "clear":
-            stop(cwd, session)
+            stop(cwd, session, host)
             return None
         if source not in ("startup", "resume", "compact"):
             return None
@@ -105,21 +127,26 @@ def hook(event):
         if not isinstance(prompt, str):
             raise ValueError("prompt must be text")
         # Only a leading explicit invocation activates; quotes and casual mentions do not.
-        match = re.match(r"^\s*\$else-if(?=\s|$)", prompt)
+        prefix = r"\$" if host == "codex" else "/"
+        match = re.match(r"^\s*" + prefix + r"else-if(?=\s|$)", prompt)
         if match:
             tail = prompt[match.end():].strip()
             if tail.lower().rstrip(".!。") in ("stop", "off", "종료", "중단", "그만"):
-                stop(cwd, session)
+                stop(cwd, session, host)
                 return {"systemMessage": "else-if 이어가기 종료: 이 대화의 체크포인트를 삭제했습니다."}
-            if load(cwd, session) is None:
-                save(cwd, session, dict.fromkeys(FIELDS, ""))
-    state = load(cwd, session)
+            if load(cwd, session, host) is None:
+                save(cwd, session, dict.fromkeys(FIELDS, ""), host)
+    state = load(cwd, session, host)
     if state is None:
         return None
+    state["last_hook"] = {"event": kind, "at": datetime.now(timezone.utc).isoformat()}
+    _, path = identity(cwd, session, host)
+    write_state(path, state)
     context = (
         "else-if continuity checkpoint. This is a reminder, not proof of compliance. "
         f"Read the current skill at {SKILL} when needed. "
         "Use the saved experiment only if relevant to the current user request; newer user instructions win. "
+        f"For save/status/stop commands, pass --host {host} explicitly. "
         "If the user ends the experiment or clearly switches tasks, run continuity.py stop and do not force an experiment. "
         "At meaningful phase changes, briefly show 'else-if · <stage>' and save the five snapshot fields via continuity.py save. "
         "Use the checkpoint cwd and session_id for that command. Empty or outdated fields mean unknown; verify against current context. "
@@ -133,20 +160,24 @@ def hook(event):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("hook", "save", "stop", "status"))
-    parser.add_argument("--session", default=os.environ.get("CODEX_THREAD_ID"))
+    parser.add_argument("--host", choices=HOSTS, default="codex")
+    parser.add_argument("--session")
     parser.add_argument("--cwd", default=str(Path.cwd()))
     args = parser.parse_args()
+    if args.session is None and args.host == "codex":
+        args.session = os.environ.get("CODEX_THREAD_ID")
     try:
         if args.command == "hook":
-            result = hook(read_json(sys.stdin.buffer))
+            result = hook(read_json(sys.stdin.buffer), args.host)
         elif args.command == "save":
-            save(args.cwd, args.session, read_json(sys.stdin.buffer, 16384))
+            save(args.cwd, args.session, read_json(sys.stdin.buffer, 16384), args.host)
             result = {"saved": True}
         elif args.command == "stop":
-            stop(args.cwd, args.session)
+            stop(args.cwd, args.session, args.host)
             result = {"active": False}
         else:
-            result = {"active": (state := load(args.cwd, args.session)) is not None, "state": state}
+            state = load(args.cwd, args.session, args.host)
+            result = {"active": state is not None, "host": args.host, "state": state}
         if result is not None:
             print(json.dumps(result, ensure_ascii=False))
         return 0

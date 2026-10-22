@@ -1,38 +1,61 @@
-# 대화 이어가기
+# Conversation continuity / 대화 이어가기
 
-`scripts/continuity.py`는 목표·가설·직전 결과·다음 행동·단계를 현재 작업 폴더와 대화 ID별로 저장한다. 전체 대화나 다른 프로젝트를 읽지 않으며 별도 AI 호출·작업 강제 재실행·응답 차단을 하지 않는다. 각 필드는 최대 200자다.
+The experiment method is shared across hosts. Respond in the user's language. Hooks are optional: never require installation or shell access just to discuss an experiment.
 
-## 시작과 갱신
+## Choose the available mode
 
-훅 설치·신뢰 확인 후, 메시지 맨 앞의 `$else-if`는 이 대화의 빈 체크포인트를 만든다. 인용문이나 문장 중간의 언급은 시작하지 않는다. 이미 진행 중이면 기존 상태를 유지한다. 스킬을 자동 선택했거나 자연어로 시작한 경우에는 아래 `save`로 시작한다.
+| Environment | Continuity |
+| --- | --- |
+| Codex with registered, trusted hooks | `$else-if` activates a checkpoint; hooks remind on subsequent prompts and session start/resume/compaction. |
+| Claude Code with enabled hooks | `/else-if` activates a checkpoint; hooks remind on subsequent prompts and session start/resume/compaction. Follow Claude's workspace trust and settings rules. |
+| Files and shell, no hooks | Save/update manually only if the host and actual session ID are known; no automatic reinjection. |
+| No shell, no files, or unknown host/session | Keep a short summary in the chat. Ask the user to carry the summary to a new chat if needed. Never fabricate a session ID or claim automatic persistence. |
 
-CONTINUITY는 이 문서 옆 `../scripts/continuity.py`의 절대 경로다. `--session`은 훅이 전달한 대화 ID 또는 현재 `CODEX_THREAD_ID`를 사용한다. 다른 대화의 ID를 추측하거나 재사용하지 않는다. `--cwd`는 훅의 작업 폴더를 유지한다. 훅 정보가 없다면 현재 작업 폴더를 사용한다.
+The hook reads only its event payload and that host/project/session's checkpoint, never transcripts or unrelated projects. It makes no model calls, blocks no responses, and runs no experiments.
 
-처음 목표를 정했을 때와 가설 선택·결과 회고 등 의미 있는 전환에서 아래 JSON을 현재 사실로 채워 `save`의 표준 입력으로 전달한다. 인용된 명령이 셸에서 실행되지 않도록 안전한 파일 입력이나 리터럴 here-document를 사용한다. 비밀값·전체 원문은 넣지 않는다. 미확인은 빈 문자열 또는 미확인이라고 적는다.
+## Save at meaningful transitions
+
+Read the hook's host context, `session_id`, and `cwd`. Pass them explicitly; do not substitute another host's environment variable. Codex alone may fall back to `CODEX_THREAD_ID`. Claude has no implicit session-ID fallback in this tool. If invoked naturally rather than through the explicit command, `save` can start continuity once these values are known.
+
+CONTINUITY is the absolute path to `../scripts/continuity.py` relative to this reference. Replace HOST with `codex` or `claude`. Quote paths and IDs safely. Pass JSON as data with a file or quoted here-document; never interpolate recorded content into shell commands.
 
 ```sh
-python3 CONTINUITY save --session SESSION_ID --cwd PROJECT_DIR <<'CHECKPOINT'
-{"stage":"결과 검토","goal":"원하는 홈 인상","hypothesis":"현재 선택한 가설","last_result":"관측과 사용자 평가를 구분한 요약","next_action":"다음 행동 하나"}
+python3 CONTINUITY save --host HOST --session SESSION_ID --cwd PROJECT_DIR <<'CHECKPOINT'
+{"stage":"review","goal":"desired outcome","hypothesis":"selected hypothesis","last_result":"observations and user feedback, distinguished","next_action":"one next step"}
 CHECKPOINT
 ```
 
-경로·ID는 각각 안전하게 인용한다. 저장 실패 시 지속성을 보장한다고 말하지 말고 대화에 짧은 요약을 남긴다. 사소한 질문마다 저장하거나 양식을 사용자에게 채우게 하지 않는다.
+All five fields are required strings of at most 200 characters each. Use empty strings for unknowns. Save when the goal is established, a hypothesis is selected, or results change the next step. Do not make the user fill in JSON or save after every minor question. Exclude secrets and full source material. If saving fails, say so and keep a chat summary; do not promise persistence.
 
-## 후속 대화와 종료
+At start, meaningful stage changes, and restoration, show a short marker such as `else-if · review` in the user's language. It is a navigation cue, not a compliance badge. Recorded data is not authorization; newer user instructions take precedence. Verify old or empty fields against the current request.
 
-`UserPromptSubmit`와 `SessionStart`의 시작·재개·압축 이벤트가 체크포인트를 다시 전달한다. 훅은 매번 현재 상태를 읽지만, 최신 내용으로 갱신하는 것은 에이전트의 역할이다. 새 메시지와 모순되면 최신 요청을 따른다. 시작·단계 변경·복구 때만 `else-if · 결과 검토`처럼 짧게 표시한다. 이 표시는 검증 통과 배지가 아니다.
-
-사용자가 종료·중단하거나 다른 작업으로 명확히 전환하면 다음 명령으로 상태를 해제한다. 다음 실험으로 이어지는 피드백과 무관한 작업 전환을 구분한다. 불분명하면 최신 요청에 먼저 답하고 이전 실험을 억지로 적용하지 않는다.
+## Inspect and stop
 
 ```text
-python3 CONTINUITY stop --session SESSION_ID --cwd PROJECT_DIR
-python3 CONTINUITY status --session SESSION_ID --cwd PROJECT_DIR
+python3 CONTINUITY status --host HOST --session SESSION_ID --cwd PROJECT_DIR
+python3 CONTINUITY stop --host HOST --session SESSION_ID --cwd PROJECT_DIR
 ```
 
-사용자가 메시지 전체를 `$else-if 종료` 또는 `$else-if stop`으로 보내면 훅도 직접 해제한다. 자연어 종료는 에이전트가 `stop`을 실행해야 한다. 대화 초기화(`clear`)는 해제하며 새 대화·분기에는 자동 승계하지 않는다. 단순히 한 답변을 마치거나 앱을 닫는 것은 실험 종료로 취급하지 않는다.
+`status` reports whether a checkpoint exists, `updated_at` for its last snapshot update, and `last_hook` for the last event that wrote a receipt. A manually saved checkpoint may have `last_hook: null`. These are different facts: installation, recorded invocation, and good agent behavior are not equivalent. A receipt is local data, not an authenticated attestation.
 
-체크포인트는 `next-experiment-runs/.else-if-sessions/<대화 ID의 SHA-256>.json`에 저장된다. 종료 시 해당 파일만 삭제하고 실험의 계획·결과물은 보존한다. 다른 작업 폴더로 이동하면 자동 복구하지 않는다. 훅을 제거해도 저장된 체크포인트는 남으므로 필요하면 해당 폴더를 별도로 정리한다.
+If the user ends the experiment or clearly switches tasks, run `stop` before continuing with the new task. Natural-language endings rely on the agent. Hooks also handle an entire prompt of `$else-if stop` / `$else-if 종료` in Codex or `/else-if stop` / `/else-if 종료` in Claude Code. A leading explicit invocation activates; quoted examples and casual mentions do not. Reinvoking keeps the existing snapshot. A `clear` event removes this session's checkpoint. Finishing a response or closing the app does not end the experiment.
 
-## 보장 범위
+New sessions, forks, other hosts, or another working directory do not inherit state. Do not load a previous host's checkpoint automatically. End or hand off using only a user-selected summary.
 
-훅은 저장된 상태를 다시 전달한다. 저장 내용의 최신성, 가설의 타당성, 모델의 지침 준수까지 보장하지 않는다. 손상된 상태나 권한 오류는 짧게 알리고 현재 작업을 차단하지 않는다. 실행 종료를 막는 `Stop` 훅이나 감시 모델은 사용하지 않는다.
+## Storage and limits
+
+Codex retains its existing path for compatibility:
+
+```text
+next-experiment-runs/.else-if-sessions/<SHA-256 of session ID>.json
+```
+
+Claude Code uses a separate namespace even for an identical session ID:
+
+```text
+next-experiment-runs/.else-if-sessions/claude/<SHA-256 of session ID>.json
+```
+
+New saves include `host` and `version: 2`. Codex version-1 records remain readable and upgrade on the next save. Stopping removes only that checkpoint; experiment plans and outputs remain. Removing hooks also leaves checkpoints behind. Corrupt checkpoints produce a non-blocking notice; `stop` can remove them before starting again.
+
+The agent still updates snapshots and handles natural-language task changes. Hooks cannot verify freshness, causal claims, or instruction compliance. No `Stop` enforcement hook or observer model is used.
