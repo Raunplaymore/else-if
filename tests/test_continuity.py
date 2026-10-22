@@ -279,6 +279,108 @@ class ContinuityTests(unittest.TestCase):
     def test_uninstall_without_existing_hooks_is_a_noop(self):
         self.assertEqual(installer.merge({}, "unused", remove=True, host="claude"), {})
 
+    def test_gemini_lifecycle_isolated_from_other_hosts(self):
+        for host in ("codex", "claude"):
+            continuity.save(self.cwd, self.session, self.snapshot, host)
+        event = {**self.event("else-if: use the else-if skill"), "hook_event_name": "BeforeAgent",
+                 "timestamp": "2026-10-23T00:00:00Z"}
+        response = continuity.hook(event, "gemini")
+        self.assertEqual(set(response["hookSpecificOutput"]), {"additionalContext"})
+        self.assertIn("activate_skill", response["hookSpecificOutput"]["additionalContext"])
+        continuity.save(self.cwd, self.session, self.snapshot, "gemini")
+        event["prompt"] = "Somewhat better, keep comparing"
+        response = continuity.hook(event, "gemini")
+        state = json.loads(response["hookSpecificOutput"]["additionalContext"].split("\n", 1)[1])
+        self.assertEqual(state["snapshot"], self.snapshot)
+        self.assertEqual(state["last_hook"]["event"], "BeforeAgent")
+        for source in ("startup", "resume"):
+            self.assertIsNotNone(continuity.hook({**event, "hook_event_name": "SessionStart", "source": source}, "gemini"))
+        self.assertIsNone(continuity.hook({**event, "hook_event_name": "SessionStart", "source": "compact"}, "gemini"))
+        self.assertIsNone(continuity.hook({**event, "hook_event_name": "PreCompress"}, "gemini"))
+        self.assertIsNotNone(continuity.hook(event, "gemini"))
+        for ending in ("stop", "종료"):
+            continuity.hook({**event, "prompt": "else-if: " + ending}, "gemini")
+            self.assertIsNone(continuity.load(self.cwd, self.session, "gemini"))
+            continuity.save(self.cwd, self.session, self.snapshot, "gemini")
+        continuity.hook({**event, "hook_event_name": "SessionStart", "source": "clear"}, "gemini")
+        self.assertIsNone(continuity.load(self.cwd, self.session, "gemini"))
+        for host in ("codex", "claude"):
+            self.assertEqual(continuity.load(self.cwd, self.session, host)["snapshot"], self.snapshot)
+
+    def test_gemini_ignored_events_and_mentions_return_json_without_writes(self):
+        for prompt in ("ordinary prompt", "`else-if:` example", "Example: else-if: goal", "/else-if goal", "$else-if goal"):
+            event = {**self.event(prompt), "hook_event_name": "BeforeAgent"}
+            run = subprocess.run([sys.executable, str(SCRIPT), "hook", "--host", "gemini"],
+                                 input=json.dumps(event), cwd=self.cwd, capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(run.stdout), {})
+        self.assertEqual(list(Path(self.cwd).iterdir()), [])
+        self.assertIsNone(continuity.hook(self.event("else-if: goal"), "gemini"))
+
+    def test_gemini_corrupt_state_and_missing_session_never_block(self):
+        continuity.save(self.cwd, self.session, self.snapshot, "gemini")
+        _, path = continuity.identity(self.cwd, self.session, "gemini")
+        path.write_text("broken")
+        event = {**self.event(), "hook_event_name": "BeforeAgent"}
+        for payload in (event, {"hook_event_name": "BeforeAgent"}):
+            run = subprocess.run([sys.executable, str(SCRIPT), "hook", "--host", "gemini"],
+                                 input=json.dumps(payload), cwd=self.cwd, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0)
+            self.assertIn("systemMessage", json.loads(run.stdout))
+        continuity.hook({**event, "prompt": "else-if: stop"}, "gemini")
+        self.assertIsNone(continuity.load(self.cwd, self.session, "gemini"))
+        run = subprocess.run([sys.executable, str(SCRIPT), "status", "--host", "gemini"],
+                             cwd=self.cwd, env={**os.environ, "CODEX_THREAD_ID": self.session},
+                             capture_output=True, text=True)
+        self.assertEqual(run.returncode, 1)
+
+    def test_gemini_installer_commands_settings_and_timeout(self):
+        home = Path(self.cwd) / "gemini config"
+        skill = home / "skills/else-if"
+        skill.parent.mkdir(parents=True)
+        skill.symlink_to(SCRIPT.parents[1], target_is_directory=True)
+        target = home / "settings.json"
+        original = {"ui": {"theme": "keep-existing"}, "hooks": {
+            "BeforeAgent": [{"hooks": [{"type": "command", "name": "existing", "command": "unrelated"}]}],
+            "disabled": ["existing"]}}
+        target.write_text(json.dumps(original))
+        before = target.read_bytes()
+        cmd = [sys.executable, str(ROOT / "scripts/install_continuity.py"), "--host", "gemini", "--config-dir", str(home)]
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        installed = json.loads(target.read_text())
+        self.assertEqual(installed["ui"], original["ui"])
+        self.assertEqual(installed["hooks"]["disabled"], ["existing"])
+        self.assertEqual(installed["hooks"]["SessionStart"][-1]["matcher"], "*")
+        self.assertNotIn("UserPromptSubmit", installed["hooks"])
+        handler = installed["hooks"]["BeforeAgent"][-1]["hooks"][0]
+        self.assertEqual(handler["timeout"], 3000)
+        self.assertNotIn("additionalContextLimit", handler)
+        self.assertEqual(handler["name"], "else-if-continuity-BeforeAgent")
+        for prompt, expected in (("ordinary prompt", "quiet"), ("else-if: use the else-if skill", "active"),
+                                 ("continue", "active"), ("else-if: stop", "stopped"), ("continue", "quiet")):
+            payload = {**self.event(prompt), "hook_event_name": "BeforeAgent"}
+            run = subprocess.run(["/bin/sh", "-c", handler["command"]], input=json.dumps(payload),
+                                 cwd=self.cwd, capture_output=True, text=True, check=True)
+            result = json.loads(run.stdout)
+            self.assertNotIn("decision", result)
+            if expected == "quiet":
+                self.assertEqual(result, {})
+            elif expected == "active":
+                self.assertIn("additionalContext", result["hookSpecificOutput"])
+                self.assertIsNotNone(continuity.load(self.cwd, self.session, "gemini"))
+            else:
+                self.assertIn("systemMessage", result)
+                self.assertIsNone(continuity.load(self.cwd, self.session, "gemini"))
+        check = subprocess.run(cmd + ["--check"], capture_output=True, text=True, check=True)
+        self.assertTrue(json.loads(check.stdout)["hooks_registered"])
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(target.read_text()), installed)
+        subprocess.run(cmd + ["--remove"], capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(target.read_text()), original)
+        self.assertTrue(any(p.read_bytes() == before for p in home.glob("settings.json.else-if-backup-*")))
+        skill.unlink()
+        no_skill = subprocess.run(["/bin/sh", "-c", handler["command"]], input="{}", capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(no_skill.stdout), {})
+
 
 if __name__ == "__main__":
     unittest.main()

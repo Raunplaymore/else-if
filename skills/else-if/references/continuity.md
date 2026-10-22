@@ -8,6 +8,7 @@ The experiment method is shared across hosts. Respond in the user's language. Ho
 | --- | --- |
 | Codex with registered, trusted hooks | `$else-if` activates a checkpoint; hooks remind on subsequent prompts and session start/resume/compaction. |
 | Claude Code with enabled hooks | `/else-if` activates a checkpoint; hooks remind on subsequent prompts and session start/resume/compaction. Follow Claude's workspace trust and settings rules. |
+| Gemini CLI with enabled hooks | A normal prompt beginning `else-if:` starts continuity. Use `activate_skill` and respect consent. `BeforeAgent` restores context on each user turn; `SessionStart` handles startup/resume/clear. |
 | Files and shell, no hooks | Save/update manually only if the host and actual session ID are known; no automatic reinjection. |
 | No shell, no files, or unknown host/session | Keep a short summary in the chat. Ask the user to carry the summary to a new chat if needed. Never fabricate a session ID or claim automatic persistence. |
 
@@ -15,9 +16,9 @@ The hook reads only its event payload and that host/project/session's checkpoint
 
 ## Save at meaningful transitions
 
-Read the hook's host context, `session_id`, and `cwd`. Pass them explicitly; do not substitute another host's environment variable. Codex alone may fall back to `CODEX_THREAD_ID`. Claude has no implicit session-ID fallback in this tool. If invoked naturally rather than through the explicit command, `save` can start continuity once these values are known.
+Read the hook's host context, `session_id`, and `cwd`. Pass them explicitly; do not substitute another host's environment variable. Codex alone may fall back to `CODEX_THREAD_ID`. Claude and Gemini have no implicit session-ID fallback in this tool; use the actual hook payload. If invoked naturally rather than through the explicit command, `save` can start continuity once these values are known.
 
-CONTINUITY is the absolute path to `../scripts/continuity.py` relative to this reference. Replace HOST with `codex` or `claude`. Quote paths and IDs safely. Pass JSON as data with a file or quoted here-document; never interpolate recorded content into shell commands.
+CONTINUITY is the absolute path to `../scripts/continuity.py` relative to this reference. Replace HOST with `codex`, `claude`, or `gemini`. Quote paths and IDs safely. Pass JSON as data with a file or quoted here-document; never interpolate recorded content into shell commands.
 
 ```sh
 python3 CONTINUITY save --host HOST --session SESSION_ID --cwd PROJECT_DIR <<'CHECKPOINT'
@@ -38,7 +39,9 @@ python3 CONTINUITY stop --host HOST --session SESSION_ID --cwd PROJECT_DIR
 
 `status` reports whether a checkpoint exists, `updated_at` for its last snapshot update, and `last_hook` for the last event that wrote a receipt. A manually saved checkpoint may have `last_hook: null`. These are different facts: installation, recorded invocation, and good agent behavior are not equivalent. A receipt is local data, not an authenticated attestation.
 
-If the user ends the experiment or clearly switches tasks, run `stop` before continuing with the new task. Natural-language endings rely on the agent. Hooks also handle an entire prompt of `$else-if stop` / `$else-if 종료` in Codex or `/else-if stop` / `/else-if 종료` in Claude Code. A leading explicit invocation activates; quoted examples and casual mentions do not. Reinvoking keeps the existing snapshot. A `clear` event removes this session's checkpoint. Finishing a response or closing the app does not end the experiment.
+If the user ends the experiment or clearly switches tasks, run `stop` before continuing with the new task. Natural-language endings rely on the agent. Hooks also handle an entire prompt of `$else-if stop` / `$else-if 종료` in Codex or `/else-if stop` / `/else-if 종료` in Claude Code, or `else-if: stop` / `else-if: 종료` in Gemini CLI. The Gemini prefix is ordinary prompt text, not a slash command; ask the host to use the else-if skill. A leading explicit invocation activates; quoted examples and casual mentions do not. Reinvoking keeps the existing snapshot. A `clear` event removes this session's checkpoint. Finishing a response or closing the app does not end the experiment.
+
+Gemini does not provide the same post-compaction `SessionStart` event as Codex/Claude in the documented contract. With the two registered hooks, restoration after compression happens on the next user turn, not necessarily during the same model turn. Do not claim immediate mid-turn recovery.
 
 New sessions, forks, other hosts, or another working directory do not inherit state. Do not load a previous host's checkpoint automatically. End or hand off using only a user-selected summary.
 
@@ -50,10 +53,11 @@ Codex retains its existing path for compatibility:
 next-experiment-runs/.else-if-sessions/<SHA-256 of session ID>.json
 ```
 
-Claude Code uses a separate namespace even for an identical session ID:
+Claude Code and Gemini CLI use separate namespaces even for an identical session ID:
 
 ```text
 next-experiment-runs/.else-if-sessions/claude/<SHA-256 of session ID>.json
+next-experiment-runs/.else-if-sessions/gemini/<SHA-256 of session ID>.json
 ```
 
 New saves include `host` and `version: 2`. Codex version-1 records remain readable and upgrade on the next save. Stopping removes only that checkpoint; experiment plans and outputs remain. Removing hooks also leaves checkpoints behind. Corrupt checkpoints produce a non-blocking notice; `stop` can remove them before starting again.

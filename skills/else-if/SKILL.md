@@ -11,7 +11,7 @@ Help the user choose one change to test and learn from its result. Respond in th
 
 Connect follow-up feedback to the current goal, selected hypothesis, last result, next action, and stage. Newer user instructions take precedence. Briefly show the stage at the start, a meaningful transition, or restoration. Do not force an experiment onto an unrelated task.
 
-When file and shell tools are available, read [continuity instructions](references/continuity.md) to save or stop a checkpoint using the actual host and session ID. Codex and Claude Code hooks are optional, never prerequisites for discussion. Do not invent an ID or borrow another host's environment variable. Without tools or a known session identity, keep those five fields as a short chat summary. Use only accessible references and do not claim automatic restoration. Carry a user-selected summary to another AI or chat only when requested; authorization does not transfer. A hook reminder does not prove compliance.
+When file and shell tools are available, read [continuity instructions](references/continuity.md) to save or stop a checkpoint using the actual host and session ID. Codex, Claude Code, and Gemini CLI hooks are optional, never prerequisites for discussion. Do not invent an ID or borrow another host's environment variable. Without tools or a known session identity, keep those five fields as a short chat summary. Use only accessible references and do not claim automatic restoration. Carry a user-selected summary to another AI or chat only when requested; authorization does not transfer. A hook reminder does not prove compliance.
 
 ## From problem to experiment
 

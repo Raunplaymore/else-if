@@ -21,13 +21,14 @@ The flow is: **goal and evidence → up to three candidates → one recommendati
 | Local Codex | `$else-if` | Prompt and session-start hooks | Automated lifecycle/install/isolation tests; earlier user feedback. Revised model behavior is not end-to-end verified. |
 | Local Claude Code | `/else-if` | Prompt and session-start hooks | Official event contract, installed-command execution, lifecycle and settings-preservation tests. Model conversations are not end-to-end verified. |
 | Chat without files or shell | Provide the instructions and keep a chat summary | Manual | No automatic persistence claim. |
-| Gemini CLI and other hosts | Not verified by this project | No adapter yet | Future integration targets. |
+| Local Gemini CLI | Normal `else-if: …` prompt requesting the skill | `BeforeAgent` and `SessionStart` hooks | Official event contract, installed commands and settings-preservation tests; native CLI/model conversations are not verified. |
+| Other hosts | Manual instructions | No adapter | No compatibility claim. |
 
 The common [Agent Skills format](https://agentskills.io/specification) does not make hook runtimes interchangeable. Local Claude Code setup is not a claim of support for Claude web, Cowork, or cloud sessions.
 
 ## Install the skill
 
-You need Codex or Claude Code and Git. The helper programs and hooks need Python 3.9+ with no third-party Python packages or separate API key. Commands below use a macOS/Linux POSIX shell; automated tests were run on macOS with Python 3.11. Windows installation is not verified.
+You need Codex, Claude Code, or Gemini CLI and Git. The helper programs and hooks need Python 3.9+ with no third-party Python packages or separate API key. Commands below use a macOS/Linux POSIX shell; automated tests were run on macOS with Python 3.11. Windows installation is not verified.
 
 ```sh
 git clone https://github.com/Raunplaymore/else-if.git
@@ -50,6 +51,13 @@ mkdir -p "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills"
 ln -s "$PWD/skills/else-if" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/else-if"
 ```
 
+**Gemini CLI**
+
+```sh
+mkdir -p "$HOME/.gemini/skills"
+ln -s "$PWD/skills/else-if" "$HOME/.gemini/skills/else-if"
+```
+
 Existing entries are not overwritten. Keep the checkout in place: moving or deleting it breaks the link. If discovery has not refreshed, start a new chat or restart the host. You can also give an agent the absolute path to `skills/else-if/SKILL.md` and ask it to read and use the skill.
 
 In your working project's chat:
@@ -59,7 +67,7 @@ $else-if I keep revising this design without getting closer to the intended dire
 Compare the requests, outputs, and feedback and recommend the next small experiment.
 ```
 
-In Claude Code, replace `$else-if` with `/else-if`. Follow up naturally, for example: “Try the first one with a 30-minute budget and no extra spend,” then “The colors changed, but the underlying issue remains.” Users do not need to fill in JSON forms for ordinary discussion.
+In Claude Code, replace `$else-if` with `/else-if`. For Gemini CLI, send a normal prompt such as `else-if: Use the else-if skill to recommend the next comparison.` The `else-if:` prefix is this project’s continuity marker, not a native slash command. Check `/skills list` and follow Gemini’s skill activation consent. See [Gemini skills](https://geminicli.com/docs/cli/skills/). Follow up naturally, for example: “Try the first one with a 30-minute budget and no extra spend,” then “The colors changed, but the underlying issue remains.” Users do not need to fill in JSON forms for ordinary discussion.
 
 ## Optional: conversation continuity hooks
 
@@ -69,26 +77,28 @@ From the else-if checkout, choose the host:
 python3 scripts/install_continuity.py --host codex
 # For Claude Code, use this instead:
 # python3 scripts/install_continuity.py --host claude
+# For Gemini CLI:
+# python3 scripts/install_continuity.py --host gemini
 ```
 
-The installer backs up and merges only else-if entries into the selected user's config: Codex `hooks.json` or Claude Code `settings.json`. Existing settings, unrelated hooks, and trust decisions are preserved. The registered events are `UserPromptSubmit` and `SessionStart` (startup, resume, compact, clear).
+The installer backs up and merges only else-if entries into the selected user's config: Codex `hooks.json`, Claude Code `settings.json`, or Gemini CLI `~/.gemini/settings.json`. Existing settings, unrelated hooks, and trust decisions are preserved. Codex and Claude Code use `UserPromptSubmit` and `SessionStart` (startup, resume, compact, clear). Gemini uses `BeforeAgent` and `SessionStart` (startup, resume, clear). Gemini lifecycle matchers use `*`, and its handler timeout is 3000 milliseconds rather than 3 seconds.
 
-Review the two `else-if-continuity-v1` entries in the host's `/hooks` menu. Codex requires trusting new definitions. Claude Code applies its own workspace trust and settings rules. Reload or restart if new entries are not visible. See [Codex hooks](https://learn.chatgpt.com/docs/hooks) and [Claude Code hooks](https://code.claude.com/docs/en/hooks).
+Review the two `else-if-continuity-v1` entries in Codex/Claude Code’s `/hooks` menu. For Gemini, use `/hooks panel` to inspect `else-if-continuity-BeforeAgent` and `else-if-continuity-SessionStart`, enabling only those entries if disabled. Codex requires trusting new definitions. Claude Code applies its own workspace trust and settings rules. Reload or restart if new entries are not visible. See [Codex hooks](https://learn.chatgpt.com/docs/hooks), [Claude Code hooks](https://code.claude.com/docs/en/hooks), and [Gemini hooks](https://geminicli.com/docs/hooks/reference/).
 
 Check configuration without changing it:
 
 ```sh
 python3 scripts/install_continuity.py --host codex --check
-# Use --host claude for Claude Code.
+# Use --host claude for Claude Code or --host gemini for Gemini CLI.
 ```
 
-This reports discovery and expected hook registration, not trust or execution. A leading `$else-if` in Codex or `/else-if` in Claude activates a small checkpoint; subsequent prompts and session resume/compaction reinject it. Quoted examples and casual mentions do not activate it. Natural-language activation can also be handled by the agent when the actual host and session ID are known.
+This reports discovery and expected hook registration, not trust or execution. A leading `$else-if` in Codex, `/else-if` in Claude, or `else-if:` in Gemini activates a small checkpoint; subsequent prompts and session resume reinject it. Codex/Claude also restore on their compact session-start event. Gemini restores after compression on the next user prompt; immediate recovery in the same model turn is not guaranteed. Quoted examples and casual mentions do not activate it. Natural-language activation can also be handled by the agent when the actual host and session ID are known.
 
-End continuity with an entire message of `$else-if stop` in Codex or `/else-if stop` in Claude Code. Natural-language endings and task switches rely on the agent to stop the checkpoint. Plans and experiment outputs remain.
+End continuity with an entire message of `$else-if stop` in Codex, `/else-if stop` in Claude Code, or `else-if: stop` in Gemini CLI. Natural-language endings and task switches rely on the agent to stop the checkpoint. Plans and experiment outputs remain.
 
 ### What is stored?
 
-Five short fields: goal, hypothesis, last result, next action, and stage. Each has a 200-character limit. Checkpoints live under your working project's `next-experiment-runs/.else-if-sessions/`; Claude uses a separate `claude/` namespace. Existing Codex version-1 records remain readable and upgrade on the next save.
+Five short fields: goal, hypothesis, last result, next action, and stage. Each has a 200-character limit. Checkpoints live under your working project's `next-experiment-runs/.else-if-sessions/`; Claude uses a separate `claude/` namespace and Gemini uses `gemini/`. Existing Codex version-1 records remain readable and upgrade on the next save.
 
 No full transcript collection, cross-project scanning, automatic host/session handoff, extra model call, response blocking, or forced rerun is performed. At meaningful transitions the agent is instructed to show a short stage marker. This is not a compliance badge.
 
@@ -128,7 +138,7 @@ policy:
   allow_implicit_invocation: false
 ```
 
-That setting is Codex-specific; follow Claude Code's settings for its selection and permission controls. Explicit invocation remains available in Codex. Stop an already-active checkpoint separately.
+That setting is Codex-specific; follow Claude Code’s or Gemini CLI’s settings for their selection and permission controls. Explicit invocation remains available in Codex. Stop an already-active checkpoint separately.
 
 Remove the hooks first, then the skill link, from the checkout:
 
@@ -142,6 +152,13 @@ For Claude Code:
 ```sh
 python3 scripts/install_continuity.py --host claude --remove
 test -L "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/else-if" && unlink "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/else-if"
+```
+
+For Gemini CLI:
+
+```sh
+python3 scripts/install_continuity.py --host gemini --remove
+test -L "$HOME/.gemini/skills/else-if" && unlink "$HOME/.gemini/skills/else-if"
 ```
 
 Reload the host's settings. Instructions already read into a conversation are not erased by unlinking; ask the agent to stop or start a fresh chat. Project records and config backups are retained for separate cleanup.
