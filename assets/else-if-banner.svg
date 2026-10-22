@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="480" viewBox="0 0 1440 480" role="img" aria-labelledby="title description">
   <title id="title">else-if — When it stops working, try something else.</title>
-  <desc id="description">A code-inspired banner: if the approach works, keep going; else if you are stuck, try one change, compare, and learn.</desc>
+  <desc id="description">A code-inspired banner with short comments: keep what works; when stuck, test an idea and learn why through one change, comparison, and feedback.</desc>
   <rect width="1440" height="480" rx="24" fill="#f5f2e9"/>
   <path d="M760 48V432" stroke="#ded9ce"/>
   <g font-family="ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace">
@@ -15,14 +15,16 @@
   <path d="M828 222V380" stroke="#d34c2b" stroke-width="4" stroke-linecap="round"/>
   <g font-family="ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace" font-size="24">
     <g fill="#746e62">
-      <text x="852" y="112">if (it_works) {</text>
+      <text x="852" y="84" font-size="18">// Keep what works.</text>
+      <text x="852" y="118">if (it_works) {</text>
       <text x="882" y="152">keep_going();</text>
     </g>
     <text x="852" y="212" fill="#252820">} <tspan fill="#bd3e21" font-weight="700">else if</tspan> (you_are_stuck) {</text>
+    <text x="882" y="248" font-size="18" fill="#746e62">// Test an idea. Learn why.</text>
     <g fill="#252820">
-      <text x="882" y="262">try_one_change();</text>
-      <text x="882" y="302">compare();</text>
-      <text x="882" y="342">learn();</text>
+      <text x="882" y="284">try_one_change();</text>
+      <text x="882" y="320">compare();</text>
+      <text x="882" y="356">learn();</text>
     </g>
     <text x="852" y="402" fill="#bd3e21">}</text>
   </g>
