@@ -1,6 +1,6 @@
 # else-if
 
-![else-if — if the approach works, keep going; else if you are stuck, try one change, compare and learn](assets/else-if-banner.svg)
+![else-if — if the approach works, keep going; else if you are stuck, try one change, compare and learn](assets/else-if-banner-v2.svg)
 
 [한국어](README.md) · English
 
